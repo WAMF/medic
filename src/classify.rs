@@ -125,10 +125,13 @@ mod tests {
     }
 
     #[test]
-    fn requirements_file_is_both_docs_and_dependency() {
-        let cats = classify("requirements.txt");
-        assert!(cats.contains(&Category::Docs));
-        assert!(cats.contains(&Category::Dependencies));
+    fn build_and_code_files_are_not_docs() {
+        assert!(!classify("CMakeLists.txt").contains(&Category::Docs));
+        assert!(!classify("prompts/system.txt").contains(&Category::Docs));
+        assert!(!classify("docs/conf.py").contains(&Category::Docs));
+        assert!(!classify("docs/build.js").contains(&Category::Docs));
+        assert!(classify("docs/img/flow.png").contains(&Category::Docs));
+        assert!(classify("requirements.txt").contains(&Category::Dependencies));
     }
 
     #[test]

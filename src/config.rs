@@ -89,7 +89,8 @@ pub struct Bugfix {
     pub weight: f64,
     pub low: f64,
     pub high: f64,
-    /// Case-insensitive words that mark a commit subject as a fix.
+    /// Case-insensitive words that mark a commit subject as a fix. A word
+    /// matches exactly or with an inflection suffix (s, es, ed, d, ing).
     pub keywords: Vec<String>,
 }
 
@@ -216,7 +217,15 @@ impl Default for Bugfix {
             weight: 5.0,
             low: 0.0,
             high: 5.0,
-            keywords: strings(&["fix", "bug", "hotfix", "revert", "regression", "broken"]),
+            keywords: strings(&[
+                "fix",
+                "bug",
+                "bugfix",
+                "hotfix",
+                "revert",
+                "regression",
+                "broken",
+            ]),
         }
     }
 }
@@ -259,9 +268,8 @@ impl Default for Paths {
                 "**/*.mdx",
                 "**/*.rst",
                 "**/*.adoc",
-                "**/*.txt",
-                "docs/**",
-                "doc/**",
+                "docs/**/*.{md,mdx,rst,adoc,txt,html,png,jpg,jpeg,gif,svg,webp}",
+                "doc/**/*.{md,mdx,rst,adoc,txt,html,png,jpg,jpeg,gif,svg,webp}",
                 "**/LICENSE*",
                 "**/CHANGELOG*",
                 "**/AUTHORS*",

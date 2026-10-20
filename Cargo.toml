@@ -2,7 +2,7 @@
 name = "medic"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.88"
 description = "Git-only PR triage: file overlap, real merge conflicts and merge-risk scoring."
 license = "MIT"
 publish = false

@@ -95,6 +95,89 @@ struct Prepared {
     merged: Option<String>,
 }
 
+impl Prepared {
+    fn into_entry(self, risk: Assessment) -> PrEntry {
+        PrEntry {
+            lines: self.files.iter().map(FileChange::lines).sum(),
+            label: self.target.label,
+            rev: self.target.rev,
+            commit: self.target.commit,
+            merge_base: self.merge_base,
+            files: self.files,
+            base_conflict: self.base_conflict.is_some(),
+            base_conflict_files: self.base_conflict.unwrap_or_default(),
+            risk,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn score(
+    git: &Git,
+    cfg: &Config,
+    classifier: &Classifier,
+    history: &History,
+    base: &Target,
+    p: &Prepared,
+    conflicts_with: Vec<(String, Vec<String>)>,
+    overlaps_with: Vec<(String, Vec<String>)>,
+) -> Result<Assessment> {
+    let mut signals = risk::gather(
+        git,
+        &base.commit,
+        &p.target.commit,
+        p.files.clone(),
+        history,
+        cfg,
+    )?;
+    signals.base_conflict = p.base_conflict.clone();
+    signals.conflicts_with = conflicts_with;
+    signals.overlaps_with = overlaps_with;
+    Ok(risk::assess(cfg, classifier, &signals))
+}
+
+/// Risk of one change. Unlike `analyse`, only pairs of `head` with each
+/// `against` ref are merge-checked, and no merge set is suggested.
+pub fn assess_one(
+    git: &Git,
+    cfg: &Config,
+    base: &Target,
+    head: Target,
+    against: Vec<Target>,
+) -> Result<PrEntry> {
+    git.require_merge_tree()?;
+    let head = prepare(git, base, head)?;
+    let mut conflicts_with = Vec::new();
+    let mut overlaps_with = Vec::new();
+    for other in against {
+        let other = prepare(git, base, other)?;
+        let shared: Vec<String> = head.paths.intersection(&other.paths).cloned().collect();
+        let conflict = if head.merged.is_some() && other.merged.is_some() {
+            pair_conflict(git, &head, &other)?
+        } else {
+            None
+        };
+        match conflict {
+            Some(files) => conflicts_with.push((other.target.label, files)),
+            None if !shared.is_empty() => overlaps_with.push((other.target.label, shared)),
+            None => {}
+        }
+    }
+    let classifier = Classifier::new(&cfg.paths)?;
+    let history = History::load(git, &base.commit, cfg)?;
+    let risk = score(
+        git,
+        cfg,
+        &classifier,
+        &history,
+        base,
+        &head,
+        conflicts_with,
+        overlaps_with,
+    )?;
+    Ok(head.into_entry(risk))
+}
+
 fn prepare(git: &Git, base: &Target, head: Target) -> Result<Prepared> {
     let merge_base = git.merge_base(&base.commit, &head.commit)?;
     let files = git.changed_files(&base.commit, &head.commit)?;
@@ -188,11 +271,16 @@ pub fn analyse(
     let history = History::load(git, &base.commit, cfg)?;
     let mut risks = Vec::with_capacity(n);
     for (i, p) in prepared.iter().enumerate() {
-        let mut signals = risk::gather(git, &base.commit, &p.target.commit, &history, cfg)?;
-        signals.base_conflict = p.base_conflict.clone();
-        signals.conflicts_with = conflicts_of[i].clone();
-        signals.overlaps_with = overlaps_of[i].clone();
-        risks.push(risk::assess(cfg, &classifier, &signals));
+        risks.push(score(
+            git,
+            cfg,
+            &classifier,
+            &history,
+            &base,
+            p,
+            conflicts_of[i].clone(),
+            overlaps_of[i].clone(),
+        )?);
     }
 
     let suggestion = suggest(
@@ -223,17 +311,7 @@ pub fn analyse(
     let prs = prepared
         .into_iter()
         .zip(risks)
-        .map(|(p, risk)| PrEntry {
-            lines: p.files.iter().map(FileChange::lines).sum(),
-            label: p.target.label,
-            rev: p.target.rev,
-            commit: p.target.commit,
-            merge_base: p.merge_base,
-            files: p.files,
-            base_conflict: p.base_conflict.is_some(),
-            base_conflict_files: p.base_conflict.unwrap_or_default(),
-            risk,
-        })
+        .map(|(p, risk)| p.into_entry(risk))
         .collect();
 
     Ok(Report {

@@ -24,7 +24,8 @@ only a local git repository. It answers two questions during a merge triage:
 - **Text for people, `--json` for agents.**
 
 Requirements: git 2.38 or later (for `merge-tree --write-tree`). A clone with
-enough history to find the merge base (not `--depth 1`).
+enough history to find the merge base (not `--depth 1`). Building needs Rust
+1.88 or later (CI tests that minimum).
 
 ## Install
 
@@ -66,13 +67,18 @@ Commands:
 Every change argument is a git ref: a branch, a full ref, a commit, or a pull
 request number.
 
-- `123` or `#123` is a pull request number.
+- `123` or `#123` is a pull request number. An argument made only of digits
+  is always a PR number, never a branch or a commit id.
 - With `--fetch <remote>`, medic first runs one `git fetch`:
   - a PR number fetches `refs/pull/<n>/head` into `refs/medic/pull/<n>`;
   - a branch name fetches `refs/heads/<name>` into
     `refs/remotes/<remote>/<name>` (or `refs/medic/heads/<name>` when the
-    remote is a URL);
-  - a full `refs/...` name fetches into `refs/medic/...`.
+    remote is a URL). `<remote>/<name>`, for example `origin/main` with
+    `--fetch origin`, names the same branch;
+  - a full `refs/...` name (for example `refs/tags/v1.2`) fetches into
+    `refs/medic/...`;
+  - `HEAD` and commit ids (7 to 40 hex digits) are not fetched; they must
+    already be local.
 - Without `--fetch`, a PR number uses `refs/medic/pull/<n>` from an earlier
   fetch. Anything else is passed to git as it is.
 
@@ -137,7 +143,13 @@ What it does, step by step:
    and overlaps folded in.
 5. **Suggested set.** See the rule below.
 
-`--files` lists every changed file in the text output. `--avoid-overlap` also
+`--files` lists every changed file in the text output.
+
+Documentation means `*.md`, `*.mdx`, `*.rst`, `*.adoc`, licence and changelog
+files, and text, HTML and image files under `docs/` or `doc/`. A build or code
+file such as `CMakeLists.txt` or `docs/conf.py` is not documentation. A rename
+counts as documentation only when both its old and new paths are
+documentation, so moving code into `docs/` still counts as code. `--avoid-overlap` also
 keeps changes that share a file out of the suggested set.
 
 #### The suggested-set rule
@@ -206,7 +218,9 @@ Reasons:
   +0.4 files: 6 code files changed (11 files in total)
 ```
 
-- `--against REF...` also checks the change against other changes. A conflict
+- `--against REF...` also checks the change against other changes, one pair
+  per `--against` ref (the `--against` refs are not checked against each
+  other). A conflict
   with one of them adds points; a shared file without a conflict adds a few.
 - `--fail-on LEVEL` exits with code 3 when the level is at or above `LEVEL`.
   Use it as a CI gate.
@@ -289,7 +303,7 @@ Defaults:
 | spread (code directories) | weight 10, low 2, high 10 |
 | tests | weight 10, min_code_lines 20, target_ratio 0.5 |
 | hotspot (commits on busiest file) | weight 10, low 3, high 20, last 90 days, max 5000 commits read |
-| bugfix_history (fix commits on a file) | weight 5, low 0, high 5; subject words starting with fix, bug, hotfix, revert, regression, broken |
+| bugfix_history (fix commits on a file) | weight 5, low 0, high 5; subject words fix, bug, bugfix, hotfix, revert, regression, broken, with or without the suffix s, es, ed, d or ing (so `fixes` counts and `fixture` does not) |
 | experience (author commits) | weight 5, low 5, high 50 |
 | conflict | base 40, other 20, overlap 5 |
 | sensitive | security 15, migrations 15, ci 10, dependencies 8, infra 8, binary 5, lockfiles 4 |

@@ -147,7 +147,7 @@ impl Git {
 
     /// Fetch `refspec` from `remote`. This is the only network call medic makes.
     pub fn fetch(&self, remote: &str, refspecs: &[String]) -> Result<()> {
-        let mut args = vec!["fetch", "--quiet", "--no-tags", remote];
+        let mut args = vec!["fetch", "--quiet", "--no-tags", "--", remote];
         args.extend(refspecs.iter().map(String::as_str));
         self.run(&args).map(|_| ())
     }

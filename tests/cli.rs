@@ -448,4 +448,29 @@ fn fetch_pull_request_refs_from_remote() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+
+    // --fetch accepts a remote-prefixed base and a local commit id.
+    let sha = git_in(&clone, &["rev-parse", "refs/medic/pull/1"]);
+    let out = Command::new(env!("CARGO_BIN_EXE_medic"))
+        .args([
+            "-C",
+            clone.to_str().unwrap(),
+            "--json",
+            "risk",
+            "--fetch",
+            "origin",
+        ])
+        .args(["--base", "origin/main", sha.trim(), "--against", "#2"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["base"]["ref"], "refs/remotes/origin/main");
+    assert!(v["risk"]["reasons"]
+        .to_string()
+        .contains("conflicts with #2"));
 }

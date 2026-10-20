@@ -151,12 +151,12 @@ fn run(cli: Cli) -> Result<ExitCode> {
         } => {
             let mut heads = vec![head];
             heads.extend(against);
-            let (base, heads) = refs::resolve(&git, &base, &heads, fetch.as_deref())?;
-            let report = overlap::analyse(&git, &cfg, base, heads, &overlap::Options::default())?;
-            let entry = &report.prs[0];
+            let (base, mut heads) = refs::resolve(&git, &base, &heads, fetch.as_deref())?;
+            let head = heads.remove(0);
+            let entry = &overlap::assess_one(&git, &cfg, &base, head, heads)?;
             if cli.json {
                 let out = serde_json::json!({
-                    "base": report.base,
+                    "base": base,
                     "head": { "label": entry.label, "ref": entry.rev, "commit": entry.commit },
                     "merge_base": entry.merge_base,
                     "config": source.as_ref().map(|p| p.display().to_string()),
@@ -164,7 +164,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 });
                 println!("{}", serde_json::to_string_pretty(&out)?);
             } else {
-                print!("{}", risk_text(&report, source.as_ref()));
+                print!("{}", risk_text(&base, entry, source.as_ref()));
             }
             let tripped = fail_on.is_some_and(|l| entry.risk.level >= l);
             Ok(if tripped {
@@ -305,8 +305,7 @@ fn overlap_text(r: &overlap::Report, list_files: bool) -> String {
     s
 }
 
-fn risk_text(r: &overlap::Report, source: Option<&PathBuf>) -> String {
-    let p = &r.prs[0];
+fn risk_text(base: &refs::Target, p: &overlap::PrEntry, source: Option<&PathBuf>) -> String {
     let a = &p.risk;
     let m = &a.metrics;
     let mut s = String::new();
@@ -315,8 +314,8 @@ fn risk_text(r: &overlap::Report, source: Option<&PathBuf>) -> String {
         "{} ({}) vs {} ({})",
         p.label,
         short(&p.commit),
-        r.base.label,
-        short(&r.base.commit)
+        base.label,
+        short(&base.commit)
     );
     let _ = writeln!(
         s,

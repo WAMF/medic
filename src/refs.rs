@@ -2,7 +2,7 @@
 //! first when `--fetch <remote>` is given.
 
 use crate::git::Git;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 
 /// A ref as the user named it, and the commit it resolved to.
@@ -20,23 +20,41 @@ fn pr_number(arg: &str) -> Option<&str> {
     (!n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).then_some(n)
 }
 
-/// Where a fetched ref lands locally, and the refspec that puts it there.
-fn plan_fetch(arg: &str, remote: &str) -> (String, String) {
+/// A commit id (7 to 40 hex digits, not all digits) or `HEAD`: something
+/// that is already local and has no branch to fetch.
+fn is_local_only(arg: &str) -> bool {
+    arg == "HEAD"
+        || ((7..=40).contains(&arg.len())
+            && arg.bytes().all(|b| b.is_ascii_hexdigit())
+            && !arg.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The refspec to fetch for `arg`, and the local ref it lands in. `None`
+/// means nothing to fetch: the argument is used as it is.
+fn plan_fetch(arg: &str, remote: &str) -> Option<(String, String)> {
     if let Some(n) = pr_number(arg) {
         let local = format!("refs/medic/pull/{n}");
-        return (format!("+refs/pull/{n}/head:{local}"), local);
+        return Some((format!("+refs/pull/{n}/head:{local}"), local));
     }
     if let Some(rest) = arg.strip_prefix("refs/") {
         let local = format!("refs/medic/{rest}");
-        return (format!("+{arg}:{local}"), local);
+        return Some((format!("+{arg}:{local}"), local));
     }
+    if is_local_only(arg) {
+        return None;
+    }
+    // `origin/main` with `--fetch origin` names the branch `main`.
+    let branch = arg
+        .strip_prefix(remote)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .unwrap_or(arg);
     // A URL is not a remote name, so it gets no refs/remotes/ namespace.
     let local = if is_remote_name(remote) {
-        format!("refs/remotes/{remote}/{arg}")
+        format!("refs/remotes/{remote}/{branch}")
     } else {
-        format!("refs/medic/heads/{arg}")
+        format!("refs/medic/heads/{branch}")
     };
-    (format!("+refs/heads/{arg}:{local}"), local)
+    Some((format!("+refs/heads/{branch}:{local}"), local))
 }
 
 fn is_remote_name(remote: &str) -> bool {
@@ -76,12 +94,21 @@ pub fn resolve(
     args.extend(heads.iter().map(String::as_str));
     let revs: Vec<String> = match fetch {
         Some(remote) => {
-            let plans: Vec<(String, String)> = args.iter().map(|a| plan_fetch(a, remote)).collect();
-            let mut specs: Vec<String> = plans.iter().map(|p| p.0.clone()).collect();
+            let plans: Vec<Option<(String, String)>> =
+                args.iter().map(|a| plan_fetch(a, remote)).collect();
+            let mut specs: Vec<String> = plans.iter().flatten().map(|p| p.0.clone()).collect();
             specs.sort();
             specs.dedup();
-            git.fetch(remote, &specs)?;
-            plans.into_iter().map(|p| p.1).collect()
+            if !specs.is_empty() {
+                git.fetch(remote, &specs).context(
+                    "fetch failed; with --fetch, name branches, PR numbers, refs/... or commit ids",
+                )?;
+            }
+            plans
+                .into_iter()
+                .zip(&args)
+                .map(|(plan, arg)| plan.map_or_else(|| arg.to_string(), |p| p.1))
+                .collect()
         }
         None => args.iter().map(|a| local_rev(git, a)).collect(),
     };
@@ -103,34 +130,47 @@ mod tests {
 
     #[test]
     fn fetch_plans() {
+        let plan = |arg: &str, remote: &str| plan_fetch(arg, remote).map(|p| (p.0, p.1));
+        let some = |spec: &str, local: &str| Some((spec.to_string(), local.to_string()));
         assert_eq!(
-            plan_fetch("#12", "origin"),
-            (
-                "+refs/pull/12/head:refs/medic/pull/12".into(),
-                "refs/medic/pull/12".into()
+            plan("#12", "origin"),
+            some(
+                "+refs/pull/12/head:refs/medic/pull/12",
+                "refs/medic/pull/12"
             )
         );
         assert_eq!(
-            plan_fetch("main", "origin"),
-            (
-                "+refs/heads/main:refs/remotes/origin/main".into(),
-                "refs/remotes/origin/main".into()
+            plan("main", "origin"),
+            some(
+                "+refs/heads/main:refs/remotes/origin/main",
+                "refs/remotes/origin/main"
             )
         );
         assert_eq!(
-            plan_fetch("main", "https://github.com/o/r.git"),
-            (
-                "+refs/heads/main:refs/medic/heads/main".into(),
-                "refs/medic/heads/main".into()
+            plan("origin/main", "origin"),
+            some(
+                "+refs/heads/main:refs/remotes/origin/main",
+                "refs/remotes/origin/main"
             )
         );
         assert_eq!(
-            plan_fetch("refs/pull/7/merge", "up"),
-            (
-                "+refs/pull/7/merge:refs/medic/pull/7/merge".into(),
-                "refs/medic/pull/7/merge".into()
+            plan("main", "https://github.com/o/r.git"),
+            some(
+                "+refs/heads/main:refs/medic/heads/main",
+                "refs/medic/heads/main"
             )
         );
+        assert_eq!(
+            plan("refs/pull/7/merge", "up"),
+            some(
+                "+refs/pull/7/merge:refs/medic/pull/7/merge",
+                "refs/medic/pull/7/merge"
+            )
+        );
+        assert_eq!(plan("HEAD", "origin"), None);
+        assert_eq!(plan("a64875e7", "origin"), None);
+        // All digits is a PR number, never a commit id.
+        assert!(plan("1234567", "origin").is_some());
     }
 
     #[test]

@@ -86,14 +86,21 @@ impl History {
     }
 }
 
+/// Inflections a fix keyword may carry: `fix` matches `fixes` and `fixed`
+/// but not `fixture` or `prefix`.
+const SUFFIXES: [&str; 6] = ["", "s", "es", "ed", "d", "ing"];
+
 fn subject_is_fix(subject: &str, keywords: &[String]) -> bool {
     subject
         .to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
         .any(|word| {
-            keywords
-                .iter()
-                .any(|k| !k.is_empty() && word.starts_with(k.as_str()))
+            keywords.iter().any(|k| {
+                !k.is_empty()
+                    && word
+                        .strip_prefix(k.as_str())
+                        .is_some_and(|rest| SUFFIXES.contains(&rest))
+            })
         })
 }
 
@@ -161,10 +168,10 @@ pub fn gather(
     git: &Git,
     base: &str,
     head: &str,
+    files: Vec<FileChange>,
     history: &History,
     cfg: &Config,
 ) -> Result<Signals> {
-    let files = git.changed_files(base, head)?;
     let hotspot = history.stats(&files, &cfg.bugfix.keywords);
     let merge_base = git.merge_base(base, head)?;
     let author = git.authors(&merge_base, head)?.into_iter().next();
@@ -196,14 +203,15 @@ fn metrics(classifier: &Classifier, files: &[FileChange]) -> Metrics {
     };
     let mut dirs = BTreeSet::new();
     for f in files {
-        let mut cats = classifier.categories(&f.path);
-        if let Some(old) = &f.old_path {
-            for c in classifier.categories(old) {
-                if !cats.contains(&c) {
-                    cats.push(c);
-                }
-            }
-        }
+        // A rename has two sides. It is docs only if both sides are docs,
+        // and code if either side is code, so moving code into docs/ still
+        // counts as code. Other categories take the union.
+        let sides: Vec<Vec<Category>> = f.paths().map(|p| classifier.categories(p)).collect();
+        let mut cats: Vec<Category> = sides.iter().flatten().copied().collect();
+        cats.sort();
+        cats.dedup();
+        let docs = sides.iter().all(|s| s.contains(&Category::Docs));
+        let code = sides.iter().any(|s| is_code(s));
         m.lines += f.lines();
         if f.is_binary() {
             m.binary_files += 1;
@@ -215,14 +223,14 @@ fn metrics(classifier: &Classifier, files: &[FileChange]) -> Metrics {
                 .or_default()
                 .push(f.path.clone());
         }
-        if cats.contains(&Category::Docs) {
+        if docs {
             m.doc_files += 1;
         }
         if cats.contains(&Category::Tests) {
             m.test_files += 1;
             m.test_lines += f.lines();
         }
-        if is_code(&cats) {
+        if code {
             m.code_files += 1;
             m.code_lines += f.lines();
             let dir = f.path.rsplit_once('/').map_or(".", |(d, _)| d);
@@ -586,11 +594,34 @@ mod tests {
     }
 
     #[test]
-    fn fix_keywords_match_word_starts() {
+    fn code_moved_into_docs_is_not_docs_only() {
+        let a = score(vec![FileChange {
+            path: "docs/x.rs".into(),
+            old_path: Some("src/x.rs".into()),
+            status: 'R',
+            added: Some(0),
+            deleted: Some(0),
+        }]);
+        assert!(!a.docs_only);
+        assert_eq!(a.metrics.code_files, 1);
+    }
+
+    #[test]
+    fn build_txt_file_is_not_docs_only() {
+        let a = score(vec![change("CMakeLists.txt", 5)]);
+        assert!(!a.docs_only);
+    }
+
+    #[test]
+    fn fix_keywords_match_whole_words() {
         let k = vec!["fix".to_string(), "bug".to_string()];
         assert!(subject_is_fix("Fixes crash on start", &k));
-        assert!(subject_is_fix("bugfix: null check", &k));
+        assert!(subject_is_fix("Fixed it", &k));
+        assert!(subject_is_fix("bugs in parser", &k));
+        assert!(!subject_is_fix("bugfix: null check", &k));
         assert!(!subject_is_fix("Add prefix option", &k));
+        assert!(!subject_is_fix("Add test fixtures", &k));
+        assert!(!subject_is_fix("Wire up bugsnag", &k));
     }
 
     #[test]

@@ -1,3 +1,6 @@
+# Pending: a human with the GitHub "workflow" scope moves this file to
+# .github/workflows/ci.yml. Coworker tokens cannot push workflow files.
+
 name: CI
 
 on:
@@ -27,9 +30,17 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
 
+  msrv:
+    name: MSRV (rust-version in Cargo.toml)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88
+      - run: cargo test --locked
+
   build:
     name: static Linux binaries
-    needs: test
+    needs: [test, msrv]
     runs-on: ubuntu-24.04
     env:
       # Pure-Rust crates only, so the Rust linker is enough for musl.
