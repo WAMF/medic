@@ -1,0 +1,81 @@
+# Pending: a human with the GitHub "workflow" scope moves this file to
+# .github/workflows/ci.yml. Coworker tokens cannot push workflow files.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: fmt, clippy, test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: git version (merge-tree --write-tree needs 2.38+)
+        run: git --version
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+
+  msrv:
+    name: MSRV (rust-version in Cargo.toml)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88
+      - run: cargo test --locked
+
+  build:
+    name: static Linux binaries
+    needs: [test, msrv]
+    runs-on: ubuntu-24.04
+    env:
+      # Pure-Rust crates only, so the Rust linker is enough for musl.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+      - run: cargo build --release --locked --target x86_64-unknown-linux-musl --target aarch64-unknown-linux-musl
+      - name: Stage binaries
+        run: |
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-musl/release/medic dist/medic-linux-amd64
+          cp target/aarch64-unknown-linux-musl/release/medic dist/medic-linux-arm64
+          (cd dist && sha256sum medic-* > SHA256SUMS)
+          ./dist/medic-linux-amd64 --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: medic-linux
+          path: dist/
+
+  release:
+    name: GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: medic-linux
+          path: dist
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
