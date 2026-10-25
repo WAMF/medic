@@ -1,6 +1,3 @@
-# Pending: a human with the GitHub "workflow" scope moves this file to
-# .github/workflows/ci.yml. Coworker tokens cannot push workflow files.
-
 name: CI
 
 on:
@@ -21,11 +18,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt, clippy
       - name: git version (merge-tree --write-tree needs 2.38+)
         run: git --version
+      - run: python3 -m unittest discover -s ci -p 'test_*.py'
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
@@ -35,7 +33,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88
+      - uses: dtolnay/rust-toolchain@1.88.0
       - run: cargo test --locked
 
   build:
@@ -48,17 +46,13 @@ jobs:
       CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.88.0
         with:
           targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
-      - run: cargo build --release --locked --target x86_64-unknown-linux-musl --target aarch64-unknown-linux-musl
-      - name: Stage binaries
-        run: |
-          mkdir -p dist
-          cp target/x86_64-unknown-linux-musl/release/medic dist/medic-linux-amd64
-          cp target/aarch64-unknown-linux-musl/release/medic dist/medic-linux-arm64
-          (cd dist && sha256sum medic-* > SHA256SUMS)
-          ./dist/medic-linux-amd64 --version
+      - name: Validate release version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python3 ci/check-release-version.py "$GITHUB_REF_NAME"
+      - run: bash ci/build-release.sh
       - uses: actions/upload-artifact@v4
         with:
           name: medic-linux
@@ -76,6 +70,8 @@ jobs:
         with:
           name: medic-linux
           path: dist
+      - name: Check publication tools
+        run: gh --version
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag

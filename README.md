@@ -402,3 +402,24 @@ model. Integration tests in `tests/cli.rs` build throwaway git repositories
 in temp directories and run the real binary: three-dot diffs, renames,
 pairwise conflicts, conflicts with the base, the suggested set, `--fetch`
 of `refs/pull/<n>/head` from a local "remote", config files and exit codes.
+
+## Versioned releases
+
+The reviewed workflow is `ci/ci.yml`. A human with workflow permission must
+copy it to `.github/workflows/ci.yml` before merging this change. GitHub
+Actions then runs it on pull requests and main.
+After review and merge, create a tag that matches the package version, such
+as `v0.1.0`. The tag run tests the code and builds static Linux binaries.
+It publishes `medic-linux-amd64`, `medic-linux-arm64`, and `SHA256SUMS`.
+The release job requires `gh`. The hosted Ubuntu runner provides it.
+A tag that does not match `Cargo.toml` fails before publication.
+
+Digital Workforce downloads these public assets and verifies `SHA256SUMS`.
+It does not need a source clone or a private repository token.
+
+To reproduce the release build with Rust 1.88.0:
+
+```sh
+rustup target add --toolchain 1.88.0 x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+RUSTUP_TOOLCHAIN=1.88.0 bash ci/build-release.sh
+```
